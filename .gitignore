@@ -1,0 +1,31 @@
+# Build outputs
+/build/
+/dist/
+/target/
+
+# Native compiler artifacts
+*.exe
+*.obj
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# Logs and local scratch
+*.log
+*.tmp
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
