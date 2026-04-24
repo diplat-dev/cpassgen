@@ -45,6 +45,44 @@ The benchmark report is written to:
 build\benchmark-report.txt
 ```
 
+## Speed Benchmarks
+
+Last local run:
+
+```bat
+python .\scripts\build_bench.py
+```
+
+Environment:
+
+- AMD Ryzen AI 9 HX 370 w/ Radeon 890M
+- Microsoft Windows NT 10.0.26100.0
+- clang 22.1.2, targeting `x86_64-pc-windows-msvc`
+- Python 3.14.3
+
+The native in-process benchmark reports per-call time after warmups. Lower is better. The full per-variant report is written to `build\benchmark-report.txt`.
+
+Fastest measured in-process cases from the 2026-04-24 run:
+
+| Case | Candidate | Median | p95 |
+| --- | --- | ---: | ---: |
+| `passgen_fill20_unchecked` (`single20`) | `repeat1-20` | `0.781 ns` | `0.976 ns` |
+| `passgen_fill20_line_unchecked` (`single20-line`) | `repeat1-20` | `0.781 ns` | `0.976 ns` |
+| `passgen_fill_unchecked(15, 20)` | `weyl-table` | `33.984 ns` | `34.765 ns` |
+| `passgen_fill(15, 20)` | `weyl-table` | `35.156 ns` | `35.546 ns` |
+| `passgen_fill_unchecked(1000, 32)` | `weyl-table` | `4.563 us` | `4.588 us` |
+| `passgen_fill_unchecked(100000, 32)` | `weyl-table` | `456.950 us` | `461.200 us` |
+
+The full build selected `repeat1-20` as the release library by `single20` median. The `repeat*-20` variants are lower-bound experiments; the `weyl-table` rows above are the fastest non-repeat generator cases from this run.
+
+One-shot CLI timings include Windows process startup and are therefore dominated by launch overhead:
+
+| Case | Median | p95 |
+| --- | ---: | ---: |
+| zero-import process floor | `3.651 ms` | `4.242 ms` |
+| `passgen.exe 15 20` to file | `3.562 ms` | `3.938 ms` |
+| `passgen.exe 15 20 123456789` to `NUL` | `3.650 ms` | `4.537 ms` |
+
 ## CLI Usage
 
 ```text
