@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import shutil
@@ -17,21 +18,55 @@ DIST = ROOT / "dist"
 INCLUDE = ROOT / "include"
 REPORT = BUILD / "benchmark-report.txt"
 
-VARIANTS = [
-    ("xorshift-mulhi", 1),
-    ("xorshift-table", 2),
-    ("wyrand-mulhi", 3),
-    ("wyrand-table", 4),
-    ("pcg-mulhi", 5),
-    ("pcg-table", 6),
-    ("xorshift-raw-table", 7),
-    ("weyl-table", 8),
-    ("weyl-xor-table", 9),
-    ("repeat1-20", 10),
-    ("repeat3-20", 11),
+NATIVE_FLAGS = [
+    "-Ofast",
+    "-funroll-loops",
+    "-mavx512f",
+    "-mavx512bw",
+    "-mavx512vl",
+    "-mavx2",
+    "-mbmi2",
 ]
 
-DEFAULT_SKIP_BENCH_WINNER = "repeat1-20"
+LTO_FLAGS = ["-flto=full"]
+
+
+@dataclass(frozen=True)
+class VariantSpec:
+    name: str
+    variant: int
+    flags: tuple[str, ...] = ()
+
+
+VARIANTS = [
+    VariantSpec("xorshift-mulhi", 1),
+    VariantSpec("xorshift-table", 2),
+    VariantSpec("wyrand-mulhi", 3),
+    VariantSpec("wyrand-table", 4),
+    VariantSpec("pcg-mulhi", 5),
+    VariantSpec("pcg-table", 6),
+    VariantSpec("xorshift-raw-table", 7),
+    VariantSpec("weyl-table", 8),
+    VariantSpec("weyl-xor-table", 9),
+    VariantSpec("repeat1-20", 10),
+    VariantSpec("repeat3-20", 11),
+    VariantSpec("repeat1-20-native", 10, tuple(NATIVE_FLAGS)),
+    VariantSpec("weyl-table-native", 8, tuple(NATIVE_FLAGS)),
+    VariantSpec("weyl-mask", 12, tuple(NATIVE_FLAGS)),
+    VariantSpec("weyl-avx512", 13, tuple(NATIVE_FLAGS)),
+    VariantSpec("weyl-avx512-lto", 13, tuple(NATIVE_FLAGS + LTO_FLAGS)),
+]
+
+DEFAULT_SKIP_BENCH_WINNER = "weyl-avx512"
+
+SUITE_CASES = [
+    "single20",
+    "single20-line",
+    "unchecked-15x20",
+    "safe-15x20",
+    "unchecked-medium",
+    "unchecked-large",
+]
 
 
 @dataclass
@@ -136,26 +171,29 @@ def link_exe(obj: Path, exe: Path, libs: list[Path], entry: str = "mainCRTStartu
     return run_command(cmd)
 
 
-def build_static_lib(name: str, variant: int) -> BuildResult:
+def build_static_lib(spec: VariantSpec) -> BuildResult:
     archiver = llvm_lib()
     if not archiver:
-        return BuildResult(name, None, False, "llvm-lib was not found on PATH")
+        return BuildResult(spec.name, None, False, "llvm-lib was not found on PATH")
 
-    out_dir = BUILD / "lib" / name
+    out_dir = BUILD / "lib" / spec.name
     obj = out_dir / "passgen_core.obj"
-    lib = out_dir / f"passgen-{name}.lib"
+    lib = out_dir / f"passgen-{spec.name}.lib"
     code, output = compile_obj(
         ROOT / "c" / "passgen_core.c",
         obj,
-        [f"-DPASSGEN_VARIANT={variant}"],
+        [f"-DPASSGEN_VARIANT={spec.variant}", *spec.flags],
     )
     if code != 0:
-        return BuildResult(name, None, False, output)
+        return BuildResult(spec.name, None, False, output)
 
     code, output = run_command([archiver, "/nologo", f"/out:{lib}", str(obj)])
     if code == 0 and lib.exists():
-        return BuildResult(name, lib, True, f"built variant {variant}")
-    return BuildResult(name, None, False, output or f"missing {lib}")
+        detail = f"built variant {spec.variant}"
+        if spec.flags:
+            detail += f" flags={' '.join(spec.flags)}"
+        return BuildResult(spec.name, lib, True, detail)
+    return BuildResult(spec.name, None, False, output or f"missing {lib}")
 
 
 def build_api_test(candidate: BuildResult) -> BuildResult:
@@ -384,6 +422,14 @@ def fmt_stats(stats: dict[str, float]) -> str:
     )
 
 
+def suite_score(results: dict[str, dict[str, float]]) -> float:
+    return math.exp(sum(math.log(results[label]["median_ms"]) for label in SUITE_CASES) / len(SUITE_CASES))
+
+
+def fmt_score(score_ms: float) -> str:
+    return f"{score_ms:.9f}ms/{score_ms * 1_000_000:.3f}ns"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build, test, benchmark, and select PassGen static-library candidate.")
     parser.add_argument("--primary-iterations", type=int, default=10000)
@@ -399,7 +445,7 @@ def main() -> int:
     report: list[str] = ["PassGen static-library build and benchmark report", ""]
     report.append("Static library builds:")
 
-    candidate_results = [build_static_lib(name, variant) for name, variant in VARIANTS]
+    candidate_results = [build_static_lib(spec) for spec in VARIANTS]
     candidates: list[LibCandidate] = []
     for result in candidate_results:
         status = "ok" if result.ok else "failed"
@@ -451,9 +497,19 @@ def main() -> int:
                 lib_results[candidate.name][label] = stats
                 report.append(f"  {label} (repeat={repeats}): {fmt_stats(stats)}")
 
-        winner = min(candidates, key=lambda c: lib_results[c.name]["single20"]["median_ms"])
+        suite_winner = min(candidates, key=lambda c: suite_score(lib_results[c.name]))
+        single20_winner = min(candidates, key=lambda c: lib_results[c.name]["single20"]["median_ms"])
+        winner = suite_winner
         report.append("")
-        report.append(f"Library winner: {winner.name} by single20 median")
+        report.append("Suite scores (geomean of in-process medians):")
+        for candidate in sorted(candidates, key=lambda c: suite_score(lib_results[c.name])):
+            report.append(f"- {candidate.name}: {fmt_score(suite_score(lib_results[candidate.name]))}")
+        report.append("")
+        report.append(f"Library winner: {winner.name} by suite score")
+        report.append(
+            f"Single20 winner: {single20_winner.name} "
+            f"({fmt_stats(lib_results[single20_winner.name]['single20'])})"
+        )
     else:
         winner = next((candidate for candidate in candidates if candidate.name == DEFAULT_SKIP_BENCH_WINNER), winner)
         report.append("")

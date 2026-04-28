@@ -37,7 +37,7 @@ For a faster build/test without benchmark timing:
 build.bat --skip-bench
 ```
 
-The full build compiles all static-library variants, runs native API and CLI correctness tests, benchmarks the candidates, selects the fastest configured `single20` variant, and copies the selected files into `dist\`. The `--skip-bench` path still builds and tests the candidates, then copies the configured release variant.
+The full build compiles all static-library variants, runs native API and CLI correctness tests, benchmarks the candidates, selects the fastest in-process suite winner, and copies the selected files into `dist\`. The `--skip-bench` path still builds and tests the candidates, then copies the configured release variant.
 
 The benchmark report is written to:
 
@@ -60,28 +60,30 @@ Environment:
 - clang 22.1.2, targeting `x86_64-pc-windows-msvc`
 - Python 3.14.3
 
-The native in-process benchmark reports per-call time after warmups. Lower is better. The full per-variant report is written to `build\benchmark-report.txt`.
+The native in-process benchmark reports per-call time after warmups. Lower is better. The release library is selected by the geometric mean of the six in-process median timings, not by `single20` alone. The full per-variant report is written to `build\benchmark-report.txt`.
 
-Fastest measured in-process cases from the 2026-04-24 run:
+Five-run median results from the 2026-04-28 native AVX512 optimization pass:
 
 | Case | Candidate | Median | p95 |
 | --- | --- | ---: | ---: |
 | `passgen_fill20_unchecked` (`single20`) | `repeat1-20` | `0.781 ns` | `0.976 ns` |
 | `passgen_fill20_line_unchecked` (`single20-line`) | `repeat1-20` | `0.781 ns` | `0.976 ns` |
-| `passgen_fill_unchecked(15, 20)` | `weyl-table` | `33.984 ns` | `34.765 ns` |
-| `passgen_fill(15, 20)` | `weyl-table` | `35.156 ns` | `35.546 ns` |
-| `passgen_fill_unchecked(1000, 32)` | `weyl-table` | `4.563 us` | `4.588 us` |
-| `passgen_fill_unchecked(100000, 32)` | `weyl-table` | `456.950 us` | `461.200 us` |
+| suite `single20` | `weyl-avx512` | `2.929 ns` | `2.929 ns` |
+| suite `single20-line` | `weyl-avx512` | `2.929 ns` | `2.929 ns` |
+| `passgen_fill_unchecked(15, 20)` | `weyl-avx512` | `35.937 ns` | `36.328 ns` |
+| `passgen_fill(15, 20)` | `weyl-avx512` | `36.718 ns` | `37.500 ns` |
+| `passgen_fill_unchecked(1000, 32)` | `weyl-avx512` | `0.513 us` | `0.513 us` |
+| `passgen_fill_unchecked(100000, 32)` | `weyl-avx512` | `51.100 us` | `54.200 us` |
 
-The full build selected `repeat1-20` as the release library by `single20` median. The `repeat*-20` variants are lower-bound experiments; the `weyl-table` rows above are the fastest non-repeat generator cases from this run.
+The five-run median suite score was `81.526 ns` for the selected AVX512 path. The `repeat*-20` variants still win the isolated `single20` lower-bound test, but the release library is selected by the full suite so the much faster fixed-32 AVX512 path is included.
 
 One-shot CLI timings include Windows process startup and are therefore dominated by launch overhead:
 
 | Case | Median | p95 |
 | --- | ---: | ---: |
-| zero-import process floor | `3.651 ms` | `4.242 ms` |
-| `passgen.exe 15 20` to file | `3.562 ms` | `3.938 ms` |
-| `passgen.exe 15 20 123456789` to `NUL` | `3.650 ms` | `4.537 ms` |
+| zero-import process floor | `4.342 ms` | `5.448 ms` |
+| `passgen.exe 15 20` to file | `4.494 ms` | `5.465 ms` |
+| `passgen.exe 15 20 123456789` to `NUL` | `4.350 ms` | `5.360 ms` |
 
 ## CLI Usage
 

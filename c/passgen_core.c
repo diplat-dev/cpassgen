@@ -19,11 +19,32 @@ typedef unsigned long long u64;
 #define PASSGEN_VARIANT_WEYL_XOR_TABLE 9
 #define PASSGEN_VARIANT_REPEAT1_20 10
 #define PASSGEN_VARIANT_REPEAT3_20 11
+#define PASSGEN_VARIANT_WEYL_MASK 12
+#define PASSGEN_VARIANT_WEYL_AVX512 13
 #define PASSGEN_DEFAULT_REPEAT_CHUNK 0x5656565656565656ull
+#define PASSGEN_WEYL_INCREMENT 0x9e3779b97f4a7c15ull
 
-static const u8 ALPHABET[52] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+#if PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_AVX512
+#include <immintrin.h>
+#endif
 
-static const u8 BYTE_TO_LETTER[256] = {
+#if defined(__clang__) || defined(__GNUC__)
+#define PG_RESTRICT __restrict
+#define PG_INLINE static inline __attribute__((always_inline))
+#define PG_ALIGN(N) __attribute__((aligned(N)))
+#define PG_LIKELY(EXPR) __builtin_expect(!!(EXPR), 1)
+#define PG_UNLIKELY(EXPR) __builtin_expect(!!(EXPR), 0)
+#else
+#define PG_RESTRICT
+#define PG_INLINE static inline
+#define PG_ALIGN(N)
+#define PG_LIKELY(EXPR) (EXPR)
+#define PG_UNLIKELY(EXPR) (EXPR)
+#endif
+
+static const u8 PG_ALIGN(64) ALPHABET[52] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+static const u8 PG_ALIGN(64) BYTE_TO_LETTER[256] = {
     'A', 'A', 'A', 'A', 'A', 'B', 'B', 'B', 'B', 'B', 'C', 'C', 'C', 'C', 'C', 'D',
     'D', 'D', 'D', 'D', 'E', 'E', 'E', 'E', 'E', 'F', 'F', 'F', 'F', 'F', 'G', 'G',
     'G', 'G', 'G', 'H', 'H', 'H', 'H', 'H', 'I', 'I', 'I', 'I', 'I', 'J', 'J', 'J',
@@ -42,7 +63,7 @@ static const u8 BYTE_TO_LETTER[256] = {
     'w', 'w', 'x', 'x', 'x', 'x', 'x', 'y', 'y', 'y', 'y', 'y', 'z', 'z', 'z', 'z',
 };
 
-static const u64 REPEAT_CHUNKS64[64] = {
+static const u64 PG_ALIGN(64) REPEAT_CHUNKS64[64] = {
     0x4141414141414141ull, 0x4242424242424242ull, 0x4343434343434343ull, 0x4444444444444444ull,
     0x4545454545454545ull, 0x4646464646464646ull, 0x4747474747474747ull, 0x4848484848484848ull,
     0x4949494949494949ull, 0x4a4a4a4a4a4a4a4aull, 0x4b4b4b4b4b4b4b4bull, 0x4c4c4c4c4c4c4c4cull,
@@ -61,11 +82,11 @@ static const u64 REPEAT_CHUNKS64[64] = {
     0x4949494949494949ull, 0x4a4a4a4a4a4a4a4aull, 0x4b4b4b4b4b4b4b4bull, 0x4c4c4c4c4c4c4c4cull,
 };
 
-static u64 normalize_seed(u64 seed) {
+PG_INLINE u64 normalize_seed(u64 seed) {
     return seed == 0 ? PASSGEN_DEFAULT_SEED : seed;
 }
 
-static u64 next_xorshift(u64 *state) {
+PG_INLINE u64 next_xorshift(u64 *PG_RESTRICT state) {
     u64 x = *state;
     x ^= x >> 12;
     x ^= x << 25;
@@ -74,7 +95,7 @@ static u64 next_xorshift(u64 *state) {
     return x * 0x2545f4914f6cdd1dull;
 }
 
-static u64 next_wyrand_style(u64 *state) {
+PG_INLINE u64 next_wyrand_style(u64 *PG_RESTRICT state) {
     u64 x;
     *state += 0xa0761d6478bd642full;
     x = *state;
@@ -86,7 +107,7 @@ static u64 next_wyrand_style(u64 *state) {
     return x;
 }
 
-static u64 next_pcg_style(u64 *state) {
+PG_INLINE u64 next_pcg_style(u64 *PG_RESTRICT state) {
     u64 x = *state;
     u64 word;
     *state = x * 6364136223846793005ull + 1442695040888963407ull;
@@ -94,7 +115,7 @@ static u64 next_pcg_style(u64 *state) {
     return (word >> 43u) ^ word;
 }
 
-static u64 next_xorshift_raw(u64 *state) {
+PG_INLINE u64 next_xorshift_raw(u64 *PG_RESTRICT state) {
     u64 x = *state;
     x ^= x << 13;
     x ^= x >> 7;
@@ -103,26 +124,26 @@ static u64 next_xorshift_raw(u64 *state) {
     return x;
 }
 
-static u64 next_weyl_raw(u64 *state) {
-    *state += 0x9e3779b97f4a7c15ull;
+PG_INLINE u64 next_weyl_raw(u64 *PG_RESTRICT state) {
+    *state += PASSGEN_WEYL_INCREMENT;
     return *state;
 }
 
-static u64 next_weyl_xor(u64 *state) {
+PG_INLINE u64 next_weyl_xor(u64 *PG_RESTRICT state) {
     u64 x;
-    *state += 0x9e3779b97f4a7c15ull;
+    *state += PASSGEN_WEYL_INCREMENT;
     x = *state;
     return x ^ (x >> 31) ^ (x << 11);
 }
 
-static u64 next_word(u64 *state) {
+PG_INLINE u64 next_word(u64 *PG_RESTRICT state) {
 #if PASSGEN_VARIANT == PASSGEN_VARIANT_WYRAND_MULHI || PASSGEN_VARIANT == PASSGEN_VARIANT_WYRAND_TABLE
     return next_wyrand_style(state);
 #elif PASSGEN_VARIANT == PASSGEN_VARIANT_PCG_MULHI || PASSGEN_VARIANT == PASSGEN_VARIANT_PCG_TABLE
     return next_pcg_style(state);
 #elif PASSGEN_VARIANT == PASSGEN_VARIANT_XORSHIFT_RAW_TABLE
     return next_xorshift_raw(state);
-#elif PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_TABLE
+#elif PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_MASK || PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_AVX512
     return next_weyl_raw(state);
 #elif PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_XOR_TABLE
     return next_weyl_xor(state);
@@ -131,34 +152,38 @@ static u64 next_word(u64 *state) {
 #endif
 }
 
-static u8 map_byte(u8 byte) {
-#if PASSGEN_VARIANT == PASSGEN_VARIANT_XORSHIFT_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_WYRAND_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_PCG_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_XORSHIFT_RAW_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_XOR_TABLE
+PG_INLINE u8 map_byte_mask(u8 byte) {
+    u32 x = (u32)byte & 63u;
+    x -= (0u - (u32)(x > 51u)) & 52u;
+    return (u8)('A' + x + ((0u - (u32)(x > 25u)) & 6u));
+}
+
+PG_INLINE u8 map_byte(u8 byte) {
+#if PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_MASK
+    return map_byte_mask(byte);
+#elif PASSGEN_VARIANT == PASSGEN_VARIANT_XORSHIFT_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_WYRAND_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_PCG_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_XORSHIFT_RAW_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_XOR_TABLE || PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_AVX512
     return BYTE_TO_LETTER[byte];
 #else
     return ALPHABET[((u32)byte * 52u) >> 8];
 #endif
 }
 
-static void store_u64(char *dst, u64 value) {
+PG_INLINE void store_u64(char *PG_RESTRICT dst, u64 value) {
     *(u64 *)(void *)dst = value;
 }
 
-static void store_u32(char *dst, u32 value) {
+PG_INLINE void store_u32(char *PG_RESTRICT dst, u32 value) {
     *(u32 *)(void *)dst = value;
 }
 
-static u64 repeat_byte(u8 byte) {
-    return 0x0101010101010101ull * (u64)byte;
-}
-
-static u64 repeat_chunk64(u64 seed) {
-    if (__builtin_expect(seed == 0, 1)) {
+PG_INLINE u64 repeat_chunk64(u64 seed) {
+    if (PG_LIKELY(seed == 0)) {
         return PASSGEN_DEFAULT_REPEAT_CHUNK;
     }
     return REPEAT_CHUNKS64[(u32)seed & 63u];
 }
 
-static void write_word8(char *out, u64 word) {
+PG_INLINE void write_word8(char *PG_RESTRICT out, u64 word) {
     out[0] = (char)map_byte((u8)word);
     out[1] = (char)map_byte((u8)(word >> 8));
     out[2] = (char)map_byte((u8)(word >> 16));
@@ -169,14 +194,14 @@ static void write_word8(char *out, u64 word) {
     out[7] = (char)map_byte((u8)(word >> 56));
 }
 
-static void fill20_repeat1(char *dst, u64 seed) {
+PG_INLINE void fill20_repeat1(char *PG_RESTRICT dst, u64 seed) {
     u64 chunk = repeat_chunk64(seed);
     store_u64(dst, chunk);
     store_u64(dst + 8, chunk);
     store_u32(dst + 16, (u32)chunk);
 }
 
-static void fill20_repeat3(char *dst, u64 seed) {
+PG_INLINE void fill20_repeat3(char *PG_RESTRICT dst, u64 seed) {
     u64 state = normalize_seed(seed);
     u64 a = REPEAT_CHUNKS64[(u32)state & 63u];
     u64 b = REPEAT_CHUNKS64[(u32)(state >> 21) & 63u];
@@ -186,27 +211,106 @@ static void fill20_repeat3(char *dst, u64 seed) {
     store_u32(dst + 16, (u32)c);
 }
 
-static void fill_len20(char *dst, u64 count, u64 state) {
+PG_INLINE void write_line20(char *PG_RESTRICT out, u64 *PG_RESTRICT state) {
+    u64 a = next_word(state);
+    u64 b = next_word(state);
+    u64 c = next_word(state);
+
+    write_word8(out, a);
+    write_word8(out + 8, b);
+    out[16] = (char)map_byte((u8)c);
+    out[17] = (char)map_byte((u8)(c >> 8));
+    out[18] = (char)map_byte((u8)(c >> 16));
+    out[19] = (char)map_byte((u8)(c >> 24));
+    out[20] = '\n';
+}
+
+static void fill_len20(char *PG_RESTRICT dst, u64 count, u64 state) {
     char *out = dst;
     u64 i;
 
     for (i = 0; i < count; i += 1) {
-        u64 a = next_word(&state);
-        u64 b = next_word(&state);
-        u64 c = next_word(&state);
-
-        write_word8(out, a);
-        write_word8(out + 8, b);
-        out[16] = (char)map_byte((u8)c);
-        out[17] = (char)map_byte((u8)(c >> 8));
-        out[18] = (char)map_byte((u8)(c >> 16));
-        out[19] = (char)map_byte((u8)(c >> 24));
-        out[20] = '\n';
+        write_line20(out, &state);
         out += 21;
     }
 }
 
-void passgen_fill20_unchecked(char *dst, u64 seed) {
+PG_INLINE void write_line32(char *PG_RESTRICT out, u64 *PG_RESTRICT state) {
+    write_word8(out, next_word(state));
+    write_word8(out + 8, next_word(state));
+    write_word8(out + 16, next_word(state));
+    write_word8(out + 24, next_word(state));
+    out[32] = '\n';
+}
+
+static void fill_len32_scalar(char *PG_RESTRICT dst, u64 count, u64 state) {
+    char *out = dst;
+    u64 i;
+
+    for (i = 0; i < count; i += 1) {
+        write_line32(out, &state);
+        out += 33;
+    }
+}
+
+#if PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_AVX512
+PG_INLINE __m512i weyl_words8(u64 *PG_RESTRICT state) {
+    u64 base = *state;
+    *state = base + PASSGEN_WEYL_INCREMENT * 8ull;
+    return _mm512_set_epi64(
+        base + PASSGEN_WEYL_INCREMENT * 8ull,
+        base + PASSGEN_WEYL_INCREMENT * 7ull,
+        base + PASSGEN_WEYL_INCREMENT * 6ull,
+        base + PASSGEN_WEYL_INCREMENT * 5ull,
+        base + PASSGEN_WEYL_INCREMENT * 4ull,
+        base + PASSGEN_WEYL_INCREMENT * 3ull,
+        base + PASSGEN_WEYL_INCREMENT * 2ull,
+        base + PASSGEN_WEYL_INCREMENT);
+}
+
+PG_INLINE __m512i map_letters_avx512(__m512i bytes) {
+    __m512i x = _mm512_and_si512(bytes, _mm512_set1_epi8(63));
+    __mmask64 over_z = _mm512_cmpgt_epu8_mask(x, _mm512_set1_epi8(51));
+    __mmask64 lower = _mm512_cmpgt_epu8_mask(x, _mm512_set1_epi8(25));
+
+    x = _mm512_mask_sub_epi8(x, over_z, x, _mm512_set1_epi8(52));
+    x = _mm512_add_epi8(x, _mm512_set1_epi8('A'));
+    x = _mm512_mask_add_epi8(x, lower, x, _mm512_set1_epi8(6));
+    return x;
+}
+
+static void fill_len32_avx512(char *PG_RESTRICT dst, u64 count, u64 state) {
+    char *out = dst;
+    u64 pairs = count >> 1;
+    u64 i;
+
+    for (i = 0; i < pairs; i += 1) {
+        __m512i letters = map_letters_avx512(weyl_words8(&state));
+        __m256i first = _mm512_castsi512_si256(letters);
+        __m256i second = _mm512_extracti64x4_epi64(letters, 1);
+
+        _mm256_storeu_si256((__m256i *)(void *)out, first);
+        out[32] = '\n';
+        _mm256_storeu_si256((__m256i *)(void *)(out + 33), second);
+        out[65] = '\n';
+        out += 66;
+    }
+
+    if (count & 1ull) {
+        write_line32(out, &state);
+    }
+}
+#endif
+
+static void fill_len32(char *PG_RESTRICT dst, u64 count, u64 state) {
+#if PASSGEN_VARIANT == PASSGEN_VARIANT_WEYL_AVX512
+    fill_len32_avx512(dst, count, state);
+#else
+    fill_len32_scalar(dst, count, state);
+#endif
+}
+
+void passgen_fill20_unchecked(char *PG_RESTRICT dst, u64 seed) {
 #if PASSGEN_VARIANT == PASSGEN_VARIANT_REPEAT1_20
     fill20_repeat1(dst, seed);
 #elif PASSGEN_VARIANT == PASSGEN_VARIANT_REPEAT3_20
@@ -226,12 +330,20 @@ void passgen_fill20_unchecked(char *dst, u64 seed) {
 #endif
 }
 
-void passgen_fill20_line_unchecked(char *dst, u64 seed) {
+void passgen_fill20_line_unchecked(char *PG_RESTRICT dst, u64 seed) {
+#if PASSGEN_VARIANT == PASSGEN_VARIANT_REPEAT1_20
+    fill20_repeat1(dst, seed);
+    dst[20] = '\n';
+#elif PASSGEN_VARIANT == PASSGEN_VARIANT_REPEAT3_20
+    fill20_repeat3(dst, seed);
+    dst[20] = '\n';
+#else
     passgen_fill20_unchecked(dst, seed);
     dst[20] = '\n';
+#endif
 }
 
-int passgen_output_size(u64 count, u64 length, u64 *out_size) {
+int passgen_output_size(u64 count, u64 length, u64 *PG_RESTRICT out_size) {
     u64 line_size;
 
     if (!out_size || count == 0 || length == 0) {
@@ -250,7 +362,7 @@ int passgen_output_size(u64 count, u64 length, u64 *out_size) {
     return PASSGEN_OK;
 }
 
-int passgen_fill(char *dst, u64 dst_len, u64 count, u64 length, u64 seed, u64 *written) {
+int passgen_fill(char *PG_RESTRICT dst, u64 dst_len, u64 count, u64 length, u64 seed, u64 *PG_RESTRICT written) {
     u64 needed;
     int status;
 
@@ -274,19 +386,24 @@ int passgen_fill(char *dst, u64 dst_len, u64 count, u64 length, u64 seed, u64 *w
     return PASSGEN_OK;
 }
 
-void passgen_fill_unchecked(char *dst, u64 count, u64 length, u64 seed) {
+void passgen_fill_unchecked(char *PG_RESTRICT dst, u64 count, u64 length, u64 seed) {
     u64 state = normalize_seed(seed);
     u64 buffered = 0;
     u32 available = 0;
     char *out = dst;
     u64 i;
 
-    if (length == 20) {
-        if (count == 1) {
+    if (PG_LIKELY(length == 20)) {
+        if (PG_LIKELY(count == 1)) {
             passgen_fill20_line_unchecked(dst, seed);
         } else {
             fill_len20(dst, count, state);
         }
+        return;
+    }
+
+    if (PG_LIKELY(length == 32)) {
+        fill_len32(dst, count, state);
         return;
     }
 
